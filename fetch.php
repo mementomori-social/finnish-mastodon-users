@@ -60,16 +60,37 @@ foreach ($csv_data as $key => $value) {
 
 // Save number of users from csv to a file usercount.json
 // Get files except usercount.json
-$files = array_diff( scandir( $dir ), array( '..', '.', 'usercount.json' ) );
+$files = array_diff( scandir( $dir ), array( '..', '.', 'usercount.json', 'all-users.json' ) );
 
 // Count files
 $count = count( $files );
-
-// Remove one being usercount.json
-$count = $count - 1; // phpcs:ignore
 
 // Save count to file
 file_put_contents( $dir . '/usercount.json', $count );
 
 // Echo message
 echo "${green}User count ${count} saved to ${dir}/usercount.json${reset}" . PHP_EOL;
+
+// Generate combined all-users.json from CSV entries
+$all_users = [];
+foreach ($csv_data as $key => $value) {
+  // Handle testausserveri.fi exception
+  if ( strpos($key, 'mastodon.testausserveri.fi') !== false ) {
+    $key = str_replace('mastodon.testausserveri.fi', 'testausserveri.fi', $key);
+  }
+
+  $file = $dir . '/' . $key . '.json';
+  if ( file_exists( $file ) ) {
+    $user_json = file_get_contents($file);
+    $user_data = json_decode($user_json, true);
+    if ($user_data && isset($user_data['id'])) {
+      // Add original key (with instance) for reference
+      $user_data['_csv_key'] = $key;
+      $all_users[] = $user_data;
+    }
+  }
+}
+
+// Save combined JSON
+file_put_contents( $dir . '/all-users.json', json_encode($all_users) );
+echo "${green}All users combined into ${dir}/all-users.json (" . count($all_users) . " users)${reset}" . PHP_EOL;

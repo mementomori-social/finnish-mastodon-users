@@ -1,15 +1,8 @@
-// Fetch local json file data
-async function getLocalJsonData(url) {
-  return new Promise((resolve, reject) => {
-    fetch(url, { cache: "no-cache" })
-    .then(response => response.json())
-    .then(data => {
-      resolve(data);
-    })
-    .catch(error => {
-      reject(error);
-    });
-  });
+// Fetch all users from single JSON file
+async function getAllUsers() {
+  const response = await fetch('cache/all-users.json', { cache: "no-cache" });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json();
 }
 
 // DOMContentLoaded
@@ -20,244 +13,173 @@ document.addEventListener('DOMContentLoaded', () => {
     window.history.replaceState({}, document.title, "/" + window.location.pathname.split("/")[1] + "/");
   }
 
-  // Parse CSV and add users with XMLHTTPRequest
-  const req = new XMLHttpRequest();
-  req.open('GET', 'following_accounts.csv', true);
-  req.send(null);
-  req.onreadystatechange = function () {
-    if (req.readyState === 4 && req.status === 200) {
-      let csv = req.responseText;
-      let lines = csv.split("\n");
-      lines.shift();
+  // Update aria-busy for user-count
+  const userCountEl = document.getElementById('user-count');
+  userCountEl.setAttribute('aria-busy', 'true');
 
-      // Update aria-busy for user-count
-      const userCount = document.getElementById('user-count');
-      userCount.setAttribute('aria-busy', 'true');
+  // Update aria-busy for user-list
+  const userListEl = document.getElementById('user-list');
+  userListEl.setAttribute('aria-busy', 'true');
 
-      // Update aria-busy for user-list
-      const userList = document.getElementById('user-list');
-      userList.setAttribute('aria-busy', 'true');
+  document.getElementById("user-list").innerHTML = "";
 
-      document.getElementById("user-list").innerHTML = "";
-
+  // Load all users from single JSON file
+  getAllUsers()
+    .then(users => {
       let counter = 0;
-      for (let i = 0; i < lines.length; i++) {
-        let line = lines[i];
 
-        if (line !== "") {
-          let parts = line.split(",");
-          let user = parts[0];
-          let acct = user.split("@")[0];
-          let user_instance = user.split("@")[1];
+      users.forEach(json => {
+        try {
+          let user = json._csv_key || json.acct;
+          let acct = json.acct;
+          let username = json.username;
+          let user_instance = user.includes('@') ? user.split('@')[1] : json.url.split('/')[2];
+          let display_name = json.display_name || acct;
+          let bio = json.note || '';
 
-          // If we're to use the user's instance
-          let instance = user_instance;
+          // Parse twemoji
+          try {
+            display_name = twemoji.parse(display_name, {
+              className: "emojione",
+              folder: '72x72',
+              ext: '.png',
+              base: 'https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/'
+            });
+          } catch (e) {}
 
-          // Exceptions for testausserveri.fi still needed with my own instance
-          if (user_instance === "mastodon.testausserveri.fi") {
-            user = acct + "@testausserveri.fi";
+          try {
+            bio = twemoji.parse(bio, {
+              className: "emojione",
+              folder: '72x72',
+              ext: '.png',
+              base: 'https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/'
+            });
+          } catch (e) {}
+
+          // If display name is empty, use username
+          if (display_name === "") {
+            display_name = acct;
           }
 
-          // Use my own instance instead to avoid rate limits
-          instance = "mementomori.social";
+          // Get access_token from local storage
+          let access_token = localStorage.getItem('finnish_mastodon_users_access_token');
 
-          // Get local json file for user
-          getLocalJsonData(`cache/${user}.json`)
-          .then(json => {
-            let user_id = json.id;
-            let acct = json.acct;
-            let username = json.username;
-            let display_name = json.display_name;
-            let bio = json.note;
-                display_name = twemoji.parse(display_name, {
-                  className: "emojione",
-                  folder: '72x72',
-                  ext: '.png',
-                  base: 'https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/'
-                });
-                bio = twemoji.parse(bio, {
-                  className: "emojione",
-                  folder: '72x72', 
-                  ext: '.png',
-                  base: 'https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/'
-                });
+          // Default to the original instance
+          let instance_link = `https://${user_instance}/@${username}`;
 
-              // If display name is empty, use username
-              if (display_name === "") {
-                display_name = acct;
-              }
+          // Exception for Vivaldi
+          if (user_instance === "vivaldi.net") {
+            instance_link = `https://social.vivaldi.net/@${username}`;
+          }
 
-              // Get access_token from local storage
-              access_token = localStorage.getItem('finnish_mastodon_users_access_token');
+          // Follow button for logged out users
+          let followButton = `<a id="button-action-${json.id}" href="${instance_link}" class="button button-action" aria-label="Mene käyttäjän ${acct} profiiliin">Profiili</a>`;
 
-              // Default to the original instance
-              let instance_link = `https://${user_instance}/@${username}`;
+          // If we have access_token, let's have the authenticated user's instance for easier following
+          if (access_token) {
+            let authed_user_instance = localStorage.getItem('finnish_mastodon_user_authed_instance_url');
+            instance_link = `${authed_user_instance}/@${user}`;
+            followButton = `<button id="button-action-${json.id}" class="button button-action has-no-action" aria-label="Seuraa käyttäjää ${acct}, avautuu uuteen ikkunaan" data-follow-id="${json.id}" data-url="${instance_link}">Seuraa</button>`;
+          }
 
-              // Exception for Vivaldi
-              if (user_instance === "vivaldi.net") {
-                instance_link = `https://social.vivaldi.net/@${username}`;
-              }
-
-              // Follow button for logged out users
-              let followButton = `<a id="button-action-${json.id}" href="${instance_link}" class="button button-action" aria-label="Mene käyttäjän ${acct} profiiliin">Profiili</a>`;
-
-              // If we have access_token, let's have the authetintaced user's instance for easier following if the follow functionality is not working
-              if ( access_token ) {
-                // Get authed_user_instance from local storage
-                authed_user_instance = localStorage.getItem('finnish_mastodon_user_authed_instance_url');
-                instance_link = `${authed_user_instance}/@${user}`;
-
-                // Follow button for logged in users
-                followButton = `<button id="button-action-${json.id}" class="button button-action has-no-action" aria-label="Seuraa käyttäjää ${acct}, avautuu uuteen ikkunaan" data-follow-id="${json.id}" data-url="${instance_link}">Seuraa</button>`;
-              }
-
-              try {
-                if (json.emojis.length > 0) {
-
-                  json.emojis.forEach(dp_emoji => {
-                    display_name = display_name.replaceAll(`:${dp_emoji.shortcode}:`, `<img src="${dp_emoji.url}" alt="Emoji ${dp_emoji.shortcode}" class="emojione">`);
-                      bio = bio.replaceAll(`:${dp_emoji.shortcode}:`, `<img src="${dp_emoji.url}" alt="Emoji ${dp_emoji.shortcode}" class="emojione">`);
-                    });
-                  }
-              } catch (e) {}
-
-              // User template
-              let userTemplate = `
-              <li class="account-card collapsed" id="user-${json.id}" data-user-name="${acct}" data-user-id="${json.id}" data-user-instance="${user_instance}">\
-              <button id="button-collapse-${json.id}" class="button-collapse account-card__permalink" aria-label="Näytä käyttäjän ${acct} lisätiedot" aria-expanded="false" aria-controls="user-${json.id}">\
-                <span class="screen-reader-text">Näytä lisätiedot</span>\
-              </button>\
-                <div class="account-card__header" aria-hidden="true">\
-                  <img src="${json.header}" alt="Käyttäjän ${acct} header-kuva">\
-                </div>\
-                <div class="account-card__title">\
-                  <div class="account-card__title__avatar">\
-                    <div class="account__avatar" style="width: 56px; height: 56px;">\
-                      <img src="${json.avatar}" alt="Käyttäjän ${acct} profiilikuva">\
-                    </div>
-                  </div>\
-                  <span class="display-name">\
-                    <bdi>\
-                      <strong class="display-name__html">${display_name}</strong>\
-                    </bdi>\
-                    <span class="display-name__account">@${user}</span>\
-                  </span>\
-                </div>\
-              </a>\
-              <div class="account-card__bio">\
-                ${bio}\
-
-                <p><a href="${instance_link}">Siirry profiilisivulle</a></p>\
-              </div>\
-              <div class="account-card__actions">\
-                <div class="account-card__counters">\
-                  <div class="account-card__counters__item">\
-                    <span>${json.statuses_count}</span>\
-                    <small><span>Viestit</span></small>\
-                  </div>\
-                  <div class="account-card__counters__item">\
-                    <span>${json.following_count}</span>\
-                    <small><span>Seuraajat</span></small>\
-                  </div>\
-                  <div class="account-card__counters__item">\
-                    <span>${json.followers_count}</span>\
-                    <small><span>Seurataan</span></small>\
-                  </div>\
-                </div>\
-                <div class="account-card__actions__button" id="actions__button-${json.id}">\
-                  ${followButton}\
-                </div>\
-              </div>\
-              </li>`;
-
-              counter++;
-
-              if (counter === 1) {
-                // Get user count from file/usercount.json
-                fetch('cache/usercount.json')
-                .then(response => response.text())
-                .then(usercountNumber => {
-                  // Add user count number to local storage
-                  localStorage.setItem('finnish_mastodon_users_count', usercountNumber);
-                });
-              }
-
-              // Save timestamp of the last time user list has been generated
-              localStorage.setItem('finnish_mastodon_users_timestamp', Date.now());
-
-              // Define user list
-              let listedUsers = JSON.parse(localStorage.getItem('finnish_mastodon_users')) || [];
-
-              // Push all users to a local storage array if they're not already there but only for the max users
-              listedUsers.push({
-                "id": user_id,
-                "acct": acct,
-                "instance": user_instance,
+          // Custom emoji replacement
+          try {
+            if (json.emojis && json.emojis.length > 0) {
+              json.emojis.forEach(dp_emoji => {
+                display_name = display_name.replaceAll(`:${dp_emoji.shortcode}:`, `<img src="${dp_emoji.url}" alt="Emoji ${dp_emoji.shortcode}" class="emojione">`);
+                bio = bio.replaceAll(`:${dp_emoji.shortcode}:`, `<img src="${dp_emoji.url}" alt="Emoji ${dp_emoji.shortcode}" class="emojione">`);
               });
-
-              // Get lenght of ul li
-              realUserCount = document.getElementById('user-list').getElementsByTagName('li').length;
-
-              // If there's already amount of users in local storage, don't add more
-              if (listedUsers.length <= realUserCount) {
-                localStorage.setItem('finnish_mastodon_users', JSON.stringify(listedUsers))
-              }
-
-              // Determine when counter is the user count amount
-              if (counter > realUserCount - 4) {
-
-                // Update aria-busy for user-count
-                const userCount = document.getElementById('user-count');
-                userCount.setAttribute('aria-busy', 'false');
-
-                // Update aria-busy for user-list
-                const userList = document.getElementById('user-list');
-                userList.setAttribute('aria-busy', 'false');
-
-                // Hide skeleton
-                const skeleton = document.getElementById('skeleton');
-                skeleton.style.display = 'none';
-              }
-
-              // Append userTemplate to user-list, use Vanilla JS .append
-              let userList = document.getElementById("user-list");
-              let userTemplateNode = document.createRange().createContextualFragment(userTemplate);
-              userList.append(userTemplateNode);
-
-              // Update user-count
-              let userCount = document.getElementById("user-count");
-              userCount.innerHTML = counter;
-
-            })
-            .catch(error => {
-              console.log(error);
-
-              // Update aria-busy for user-list
-              const userList = document.getElementById('user-list');
-              userList.setAttribute('aria-busy', 'false');
-
-              // Only for one iteration
-              if (counter === 0) {
-                // Replace rate limit message inside #heading-users
-
-                if(error.message === "Too Many Requests") {
-                  document.getElementById('heading-users').innerHTML = 'Palvelimella on juuri nyt liikaa kuormaa. Kokeile hetken päästä uudelleen...';
-                }
-              }
             }
-          );
+          } catch (e) {}
+
+          // User template
+          let userTemplate = `
+          <li class="account-card collapsed" id="user-${json.id}" data-user-name="${acct}" data-user-id="${json.id}" data-user-instance="${user_instance}">
+            <button id="button-collapse-${json.id}" class="button-collapse account-card__permalink" aria-label="Näytä käyttäjän ${acct} lisätiedot" aria-expanded="false" aria-controls="user-${json.id}">
+              <span class="screen-reader-text">Näytä lisätiedot</span>
+            </button>
+            <div class="account-card__header" aria-hidden="true">
+              <img src="${json.header}" alt="Käyttäjän ${acct} header-kuva">
+            </div>
+            <div class="account-card__title">
+              <div class="account-card__title__avatar">
+                <div class="account__avatar" style="width: 56px; height: 56px;">
+                  <img src="${json.avatar}" alt="Käyttäjän ${acct} profiilikuva">
+                </div>
+              </div>
+              <span class="display-name">
+                <bdi>
+                  <strong class="display-name__html">${display_name}</strong>
+                </bdi>
+                <span class="display-name__account">@${user}</span>
+              </span>
+            </div>
+            <div class="account-card__bio">
+              ${bio}
+              <p><a href="${instance_link}">Siirry profiilisivulle</a></p>
+            </div>
+            <div class="account-card__actions">
+              <div class="account-card__counters">
+                <div class="account-card__counters__item">
+                  <span>${json.statuses_count}</span>
+                  <small><span>Viestit</span></small>
+                </div>
+                <div class="account-card__counters__item">
+                  <span>${json.following_count}</span>
+                  <small><span>Seuraajat</span></small>
+                </div>
+                <div class="account-card__counters__item">
+                  <span>${json.followers_count}</span>
+                  <small><span>Seurataan</span></small>
+                </div>
+              </div>
+              <div class="account-card__actions__button" id="actions__button-${json.id}">
+                ${followButton}
+              </div>
+            </div>
+          </li>`;
+
+          // Append to DOM
+          let userTemplateNode = document.createRange().createContextualFragment(userTemplate);
+          userListEl.append(userTemplateNode);
+
+          counter++;
+        } catch (e) {
+          console.error('Error processing user:', json.acct, e);
         }
-      }
-    }
-  }
+      });
+
+      // Update counter
+      userCountEl.innerHTML = counter;
+      userCountEl.setAttribute('aria-busy', 'false');
+      userListEl.setAttribute('aria-busy', 'false');
+
+      // Hide skeleton
+      document.getElementById('skeleton').style.display = 'none';
+
+      // Save to localStorage
+      localStorage.setItem('finnish_mastodon_users_count', counter);
+      localStorage.setItem('finnish_mastodon_users_timestamp', Date.now());
+
+      // Save user list to localStorage
+      let listedUsers = users.map(u => ({
+        id: u.id,
+        acct: u.acct,
+        instance: u._csv_key ? u._csv_key.split('@')[1] : u.url.split('/')[2]
+      }));
+      localStorage.setItem('finnish_mastodon_users', JSON.stringify(listedUsers));
+    })
+    .catch(error => {
+      console.error('Failed to load users:', error);
+      userListEl.setAttribute('aria-busy', 'false');
+      document.getElementById('heading-users').innerHTML = 'Virhe ladattaessa käyttäjiä. Yritä myöhemmin uudelleen.';
+    });
 
   // Expand/Collapse single account-card based on user id
   function expandCollapseUser(id) {
-    // Get [data-user-id]
     let user = document.querySelector("[data-user-id='"+id+"']");
     let button = document.getElementById("button-collapse-"+id);
 
-    // Check if user is undefined and do nothing if it is
     if (user === null) {
       return;
     }
