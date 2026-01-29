@@ -86,6 +86,9 @@ function checkUserExistsOnHomeInstance($acct) {
 // Track users to remove from CSV
 $users_to_remove = [];
 
+// Track users who have moved (old_acct => new_acct)
+$users_moved = [];
+
 // Fetch json from API
 foreach ($csv_data as $key => $value) {
   // If key contains mastodon.testausserveri.fi, replace it with testausserveri.fi
@@ -136,8 +139,57 @@ foreach ($csv_data as $key => $value) {
       }
       continue;
     } else {
-      file_put_contents($file, $json);
-      echo "${green}User ${key} saved to ${file}${reset}" . PHP_EOL;
+      // Check if user has moved to a new account
+      if (isset($obj->moved) && isset($obj->moved->url)) {
+        // Extract new account from moved.url (e.g., https://mementomori.social/@milesizdead)
+        $moved_url = $obj->moved->url;
+        $moved_username = $obj->moved->username ?? $obj->moved->acct;
+        // Parse instance from URL
+        preg_match('/https?:\/\/([^\/]+)/', $moved_url, $matches);
+        $moved_instance = $matches[1] ?? null;
+
+        if ($moved_instance && $moved_username) {
+          $new_acct = $moved_username . '@' . $moved_instance;
+        } else {
+          $new_acct = $obj->moved->acct;
+          // Fallback: if no @ in acct, add instance from key
+          if (strpos($new_acct, '@') === false) {
+            $new_acct = $new_acct . '@' . explode('@', $key)[1];
+          }
+        }
+
+        echo "${yellow}User ${key} has MOVED to ${new_acct}${reset}" . PHP_EOL;
+
+        // Get original key for CSV update
+        $original_key = $key;
+        foreach ($csv_data as $csv_key => $csv_val) {
+          if (strpos($csv_key, explode('@', $key)[0]) === 0) {
+            $original_key = $csv_key;
+            break;
+          }
+        }
+
+        $users_moved[$original_key] = $new_acct;
+
+        // Delete old cache file
+        if (file_exists($file)) {
+          unlink($file);
+        }
+
+        // Fetch and save the new account data
+        $new_url = 'https://mementomori.social/api/v1/accounts/lookup?acct=' . $new_acct;
+        $new_json = @file_get_contents($new_url);
+        $new_obj = json_decode($new_json);
+
+        if ($new_obj && !isset($new_obj->error)) {
+          $new_file = $dir . '/' . $new_acct . '.json';
+          file_put_contents($new_file, $new_json);
+          echo "${green}New account ${new_acct} saved to ${new_file}${reset}" . PHP_EOL;
+        }
+      } else {
+        file_put_contents($file, $json);
+        echo "${green}User ${key} saved to ${file}${reset}" . PHP_EOL;
+      }
     }
   }
 }
@@ -178,6 +230,31 @@ foreach ($csv_data as $key => $value) {
 // Save combined JSON
 file_put_contents( $dir . '/all-users.json', json_encode($all_users) );
 echo "${green}All users combined into ${dir}/all-users.json (" . count($all_users) . " users)${reset}" . PHP_EOL;
+
+// Update CSV for users who have moved
+if (!empty($users_moved)) {
+  echo PHP_EOL . "${yellow}Updating " . count($users_moved) . " moved user(s) in CSV...${reset}" . PHP_EOL;
+
+  // Read current CSV
+  $csv_lines = file($csv);
+  $new_csv_lines = [];
+
+  foreach ($csv_lines as $line) {
+    $updated_line = $line;
+    foreach ($users_moved as $old_acct => $new_acct) {
+      if (strpos($line, $old_acct) === 0) {
+        $updated_line = $new_acct . ", true\n";
+        echo "${green}Updated in CSV: ${old_acct} -> ${new_acct}${reset}" . PHP_EOL;
+        break;
+      }
+    }
+    $new_csv_lines[] = $updated_line;
+  }
+
+  // Write updated CSV
+  file_put_contents($csv, implode('', $new_csv_lines));
+  echo "${green}CSV updated with " . count($users_moved) . " moved user(s).${reset}" . PHP_EOL;
+}
 
 // Remove deleted users from CSV if any were found
 if (!empty($users_to_remove)) {
