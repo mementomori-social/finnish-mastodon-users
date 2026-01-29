@@ -25,6 +25,67 @@ if (php_sapi_name() !== 'cli') {
   die('This script can only be run from the command line.');
 }
 
+// Function to check if user exists on their home instance (bulletproof check)
+function checkUserExistsOnHomeInstance($acct) {
+  // Split acct into username and instance
+  $parts = explode('@', $acct);
+  if (count($parts) !== 2) {
+    return true; // Can't parse, assume exists to be safe
+  }
+  $username = $parts[0];
+  $instance = $parts[1];
+
+  // Check the home instance directly
+  $url = "https://{$instance}/api/v1/accounts/lookup?acct={$username}";
+
+  $context = stream_context_create([
+    'http' => [
+      'timeout' => 10,
+      'ignore_errors' => true,
+      'header' => 'User-Agent: FinnishMastodonUsers/1.0'
+    ]
+  ]);
+
+  $response = @file_get_contents($url, false, $context);
+
+  // Network error = assume user exists to be safe
+  if ($response === false) {
+    return true;
+  }
+
+  // Check HTTP status from response headers
+  $httpCode = 0;
+  if (isset($http_response_header)) {
+    foreach ($http_response_header as $header) {
+      if (preg_match('/HTTP\/\d\.\d\s+(\d+)/', $header, $matches)) {
+        $httpCode = (int)$matches[1];
+      }
+    }
+  }
+
+  // 404 or 410 = user definitively doesn't exist
+  if ($httpCode === 404 || $httpCode === 410) {
+    return false;
+  }
+
+  // Check if user is suspended (deleted account)
+  if ($response) {
+    $data = json_decode($response, true);
+    if (isset($data['suspended']) && $data['suspended'] === true) {
+      return false; // User is suspended/deleted
+    }
+    // Also check for error response
+    if (isset($data['error'])) {
+      return false; // API returned an error
+    }
+  }
+
+  return true; // Any other case, assume exists to be safe
+}
+
+// Track users to remove from CSV
+$users_to_remove = [];
+
 // Fetch json from API
 foreach ($csv_data as $key => $value) {
   // If key contains mastodon.testausserveri.fi, replace it with testausserveri.fi
@@ -48,8 +109,31 @@ foreach ($csv_data as $key => $value) {
     $json = file_get_contents($url);
     $obj = json_decode($json);
 
-    if (empty($obj)) {
-      echo "${red}No user found for ${key}${reset}" . PHP_EOL;
+    if (empty($obj) || isset($obj->error)) {
+      echo "${yellow}No user found via federation for ${key}, checking home instance...${reset}" . PHP_EOL;
+
+      // Double-check on home instance before giving up
+      $original_key = $key;
+      // Restore original key for home instance check (undo testausserveri transformation)
+      foreach ($csv_data as $csv_key => $csv_val) {
+        if (strpos($csv_key, explode('@', $key)[0]) === 0) {
+          $original_key = $csv_key;
+          break;
+        }
+      }
+
+      if (!checkUserExistsOnHomeInstance($original_key)) {
+        echo "${red}User ${original_key} confirmed DELETED on home instance - marking for removal${reset}" . PHP_EOL;
+        $users_to_remove[] = $original_key;
+
+        // Delete cache file if exists
+        if (file_exists($file)) {
+          unlink($file);
+          echo "${red}Deleted cache file: ${file}${reset}" . PHP_EOL;
+        }
+      } else {
+        echo "${yellow}User ${key} not found via federation but exists on home instance (federation issue)${reset}" . PHP_EOL;
+      }
       continue;
     } else {
       file_put_contents($file, $json);
@@ -94,3 +178,30 @@ foreach ($csv_data as $key => $value) {
 // Save combined JSON
 file_put_contents( $dir . '/all-users.json', json_encode($all_users) );
 echo "${green}All users combined into ${dir}/all-users.json (" . count($all_users) . " users)${reset}" . PHP_EOL;
+
+// Remove deleted users from CSV if any were found
+if (!empty($users_to_remove)) {
+  echo PHP_EOL . "${red}Removing " . count($users_to_remove) . " deleted user(s) from CSV...${reset}" . PHP_EOL;
+
+  // Read current CSV
+  $csv_lines = file($csv);
+  $new_csv_lines = [];
+
+  foreach ($csv_lines as $line) {
+    $should_keep = true;
+    foreach ($users_to_remove as $remove_user) {
+      if (strpos($line, $remove_user) === 0) {
+        $should_keep = false;
+        echo "${red}Removing from CSV: ${remove_user}${reset}" . PHP_EOL;
+        break;
+      }
+    }
+    if ($should_keep) {
+      $new_csv_lines[] = $line;
+    }
+  }
+
+  // Write updated CSV
+  file_put_contents($csv, implode('', $new_csv_lines));
+  echo "${green}CSV updated. Removed " . count($users_to_remove) . " user(s).${reset}" . PHP_EOL;
+}
