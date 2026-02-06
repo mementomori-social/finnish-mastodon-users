@@ -16,7 +16,7 @@
 - One logical change per commit
 - Keep commit messages concise (one line), use sentence case
 - Reference Linear issues at end: `Fix navigation bug, Ref: DEV-123`
-- Do not use @ in commits as it highlights wrong users on GitHub
+- Commit message example: `Add user@instance.social`
 - Use sentence case for headings (not Title Case)
 - Never use bold text as headings, use proper heading levels instead
 - Always add an empty line after headings
